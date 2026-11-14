@@ -16,6 +16,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import org.kylepitcock.legacyconnector.loader.LegacyDependencies;
 import org.kylepitcock.legacyconnector.loader.LegacyModDecl;
 import org.kylepitcock.legacyconnector.loader.LibraryBridges;
 import org.kylepitcock.legacyconnector.loader.transform.LinkReport;
@@ -61,7 +62,20 @@ public final class CheckJar {
         }
         for (String jarArg : jarArgs) {
             Path jarPath = Path.of(jarArg);
-            LegacyJar jar = LegacyJarInspector.inspect(jarPath);
+            LegacyJar jar;
+            try {
+                jar = LegacyJarInspector.inspect(jarPath);
+            } catch (IOException | RuntimeException e) {
+                // a truncated or corrupt archive (ZipException: zip END header not found) must not stop the check of the other jars
+                String reason = "unreadable archive, skipped: " + e;
+                System.out.println(jarPath.getFileName() + ": " + reason);
+                JsonObject r = new JsonObject();
+                r.addProperty("jar", jarPath.getFileName().toString());
+                r.addProperty("result", "skipped");
+                r.addProperty("reason", reason);
+                records.add(r);
+                continue;
+            }
             if (jar == null) {
                 System.out.println(jarPath.getFileName() + ": not a legacy Forge mod");
                 JsonObject r = new JsonObject();
@@ -91,12 +105,28 @@ public final class CheckJar {
                 }
             }
         }
-        transformer.presentMods(jars.stream().flatMap(j -> j.mods.stream()).map(m -> m.legacyId).toList());
-        Map<LegacyVersion, Map<String, ClassInfo>> peers = new EnumMap<>(LegacyVersion.class);
-        for (LegacyJar jar : jars) {
-            Map<String, ClassInfo> p = peers.computeIfAbsent(jar.version, v -> new HashMap<>());
-            for (ClassInfo c : transformer.scan(jar)) p.putIfAbsent(c.name, c);
+        // required dependencies that are not in the set (a jar that FML would not have started)
+        Map<LegacyJar, List<String>> missingDeps = new java.util.LinkedHashMap<>();
+        {
+            List<LibraryBridges.Bridge> inUse = "false".equalsIgnoreCase(System.getProperty("legacyconnector.check.bridges")) ? List.of()
+                    : LibraryBridges.KNOWN.stream().filter(b -> !(jars.stream().anyMatch(j -> j.fileName().toLowerCase(java.util.Locale.ROOT).startsWith("codechickenlib"))
+                            && "codechicken/lib/".equals(b.apiRoot()))).toList();
+            List<String> apiIds = jars.stream().flatMap(j -> j.apis.stream()).map(a -> a[0]).toList();
+            java.util.Set<String> have = LegacyDependencies.presentIds(jars, inUse, java.util.Set.of(), apiIds);
+            for (var p : LegacyDependencies.check(jars, have, inUse, true)) {
+                LegacyJar owner = jars.stream().filter(j -> j.mods.contains(p.mod())).findFirst().orElse(null);
+                if (!p.fatal() || owner == null) continue;
+                missingDeps.computeIfAbsent(owner, k -> new ArrayList<>()).add(p.message());
+                System.out.println(owner.fileName() + ": " + p.message());
+            }
         }
+        transformer.presentMods(jars.stream().flatMap(j -> j.mods.stream()).map(m -> m.legacyId).toList());
+        Map<LegacyVersion, org.kylepitcock.legacyconnector.loader.transform.PeerClasses> peerSets = new EnumMap<>(LegacyVersion.class);
+        for (LegacyJar jar : jars) {
+            peerSets.computeIfAbsent(jar.version, v -> new org.kylepitcock.legacyconnector.loader.transform.PeerClasses()).add(transformer.scan(jar));
+        }
+        Map<LegacyVersion, Map<String, ClassInfo>> peers = new EnumMap<>(LegacyVersion.class);
+        peerSets.forEach((v, set) -> peers.put(v, set.classes()));
         Map<LegacyVersion, SynthDemand> demand = new EnumMap<>(LegacyVersion.class);
         Map<Path, JsonObject> recordsByOutJar = new java.util.LinkedHashMap<>();
         List<Path> originals = new ArrayList<>();
@@ -111,6 +141,16 @@ public final class CheckJar {
             Path outJar = out.resolve("out-" + (n++) + ".jar");
             var result = transformer.transform(jar, outJar, peers.get(jar.version));
             JsonObject rec = record(jar, result.links.errorCount() == 0 ? "links" : "unresolved", null, result.links, result.classes);
+            if (missingDeps.containsKey(jar)) {
+                // not a defect of the layer: the pack lacks a library the mod declares as required
+                // the mod still loads in the game (FML would not have started it); true when everything else it uses links
+                if (result.links.errorCount() == 0) rec.addProperty("linksWithoutDependency", true);
+                rec.addProperty("result", "missing-dependency");
+                JsonArray deps = new JsonArray();
+                missingDeps.get(jar).forEach(deps::add);
+                rec.add("missingDependencies", deps);
+                rec.addProperty("reason", missingDeps.get(jar).get(0));
+            }
             records.add(rec);
             recordsByOutJar.put(outJar, rec);
             // -Dlegacyconnector.check.keep=<dir>: keep the translated jars (for ./gradlew textureReport)

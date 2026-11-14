@@ -209,6 +209,9 @@ dependencies {
             additionalRuntimeClasspath lib
         }
     }
+    // Scala 2.10 for Forge 1.6.4 / 1.5.2 mods (bdew's Gendustry, BD Lib): only in the bundle, never on the class path (2.11 is the class path's Scala).
+    legacyLibs 'org.scala-lang:scala-library:2.10.3'
+    legacyLibs 'org.scala-lang:scala-reflect:2.10.3'
     // Java 8 shipped Nashorn (legacy mods script with jdk.nashorn, relocated to the standalone engine; the dev remote control
     // evaluates JavaScript with it too). NeoForge ships the same engine for its coremods, so it is not embedded: a second
     // copy in the game layer stops the game from starting ("Module scala.reflect reads more than one module named
@@ -342,6 +345,61 @@ tasks.register('gap1201', JavaExec) {
         }
         [(project.findProperty('srgTable') ?: project(':loader').layout.buildDirectory.file('generated/srg-mojang/legacyconnector/mappings/1.20.1/srg-mojang.tsv').get().asFile.absolutePath).toString(), renames, gapTargets(project.findProperty('targetJars').toString(), sourceSets.main.output.classesDirs.files.collect { it.absolutePath }.join(',')),
          (project.findProperty('gapReport') ?: layout.buildDirectory.file('reports/gap1201.txt').get().asFile.absolutePath).toString()] + jars
+    } as CommandLineArgumentProvider)
+}
+
+// Event tables of the 1.20.1 pipeline from the real jars (abstract NeoForge events, Forge events without a counterpart):
+// ./gradlew eventTables1201 -PeventJars=<neoforge merged>,<bus>,<fml loader> -PforgeJar=<forge-1.20.1-universal.jar> [-PeventOut=loader/src/main/resources/legacyconnector/forward/1.20.1/neoforge-abstract-events.tsv]
+tasks.register('eventTables1201', JavaExec) {
+    dependsOn ':loader:classes'
+    classpath = project(':loader').sourceSets.main.runtimeClasspath
+    mainClass = 'org.kylepitcock.legacyconnector.loader.tools.EventTables1201Tool'
+    argumentProviders.add({
+        def a = ['--neoforge', project.findProperty('eventJars').toString(), '--facades', 'src/main/java/legacyconnector/v1_20_1']
+        if (project.findProperty('forgeJar')) a += ['--forge', project.findProperty('forgeJar').toString()]
+        if (project.findProperty('eventOut')) a += ['--out', project.findProperty('eventOut').toString()]
+        a
+    } as CommandLineArgumentProvider)
+}
+// Deterministic single-JAR preflight report: ./gradlew preflight1201 -PpreflightJar=path/to/mod.jar [-PpreflightModsDirs=mods,other-mods]
+tasks.register('preflight1201', JavaExec) {
+    group = 'verification'
+    description = 'Writes a deterministic JSON and text preflight report for one Forge 1.20.1 JAR.'
+    dependsOn ':loader:classes'
+    classpath = project(':loader').sourceSets.main.runtimeClasspath +
+            project(':loader').sourceSets.main.compileClasspath.filter {
+                it.name.startsWith('gson') || it.name.startsWith('slf4j')
+            }
+    mainClass = 'org.kylepitcock.legacyconnector.loader.tools.forge1201.Forge1201PreflightAnalyzer'
+    maxHeapSize = '2g'
+    argumentProviders.add({
+        def jarValue = project.findProperty('preflightJar')
+        if (!jarValue) {
+            throw new GradleException("Missing -PpreflightJar=<path to Forge 1.20.1 JAR>")
+        }
+        def sourceJar = file(jarValue.toString())
+        if (!sourceJar.isFile()) {
+            throw new GradleException("Preflight JAR does not exist: ${sourceJar}")
+        }
+        def reportDir = file(project.findProperty('preflightReportDir')
+                ?: layout.buildDirectory.dir('reports/preflight1201').get().asFile)
+        def jsonFile = project.findProperty('preflightJson')
+                ? file(project.property('preflightJson').toString())
+                : new File(reportDir, sourceJar.name + '.json')
+        def textFile = project.findProperty('preflightText')
+                ? file(project.property('preflightText').toString())
+                : new File(reportDir, sourceJar.name + '.txt')
+        def args = [sourceJar.absolutePath]
+        def dirsValue = (project.findProperty('preflightModsDirs') ?: '').toString()
+        dirsValue.split(',').collect { it.trim() }.findAll { it }.each { dir ->
+            args.add('--mods-dir')
+            args.add(file(dir).absolutePath)
+        }
+        args.add('--json')
+        args.add(jsonFile.absolutePath)
+        args.add('--text')
+        args.add(textFile.absolutePath)
+        args
     } as CommandLineArgumentProvider)
 }
 

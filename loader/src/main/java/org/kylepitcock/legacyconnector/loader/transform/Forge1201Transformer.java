@@ -221,7 +221,40 @@ public final class Forge1201Transformer {
 
     // ---- the jar --------------------------------------------------------------------------------------------------------------
 
+    /**
+     * Structure of a jar's classes for the translation of the OTHER jars of the set ({@link Mc1201Hierarchy#peers}): class names after the Forge renames,
+     * supertypes, and the declared methods whose name a migration table mentions (the old-signature overrides a subclass in another jar may call or override).
+     * Cheap: method bodies are skipped, everything else is dropped.
+     */
+    public List<org.kylepitcock.legacyconnector.loader.shim.ClassInfo> scan(LegacyJar jar) throws IOException {
+        Set<String> watched = Mc1201Tables.get().watchedMethodNames();
+        Mapper mapper = new Mapper();
+        List<org.kylepitcock.legacyconnector.loader.shim.ClassInfo> out = new ArrayList<>();
+        try (ZipFile zip = new ZipFile(jar.existing().toFile())) {
+            for (Enumeration<? extends ZipEntry> en = zip.entries(); en.hasMoreElements(); ) {
+                ZipEntry e = en.nextElement();
+                String name = e.getName();
+                if (e.isDirectory() || !name.endsWith(".class") || name.startsWith("META-INF/")) continue;
+                try (InputStream in = zip.getInputStream(e)) {
+                    ClassNode node = new ClassNode();
+                    new ClassReader(in.readAllBytes()).accept(new ClassRemapper(node, mapper), ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+                    var info = new org.kylepitcock.legacyconnector.loader.shim.ClassInfo(node.name, node.superName, List.copyOf(node.interfaces), node.access);
+                    for (MethodNode m : node.methods) if (watched.contains(m.name)) info.methods.put(m.name + m.desc, m.access);
+                    out.add(info);
+                } catch (RuntimeException ex) {
+                    // reported when the jar itself is translated
+                }
+            }
+        }
+        return out;
+    }
+
     public LegacyJarTransformer.Result transform(LegacyJar jar, Path output) throws IOException {
+        return transform(jar, output, Map.of());
+    }
+
+    /** @param peers the classes of the other jars of the set (see {@link #scan}), by name */
+    public LegacyJarTransformer.Result transform(LegacyJar jar, Path output, Map<String, org.kylepitcock.legacyconnector.loader.shim.ClassInfo> peers) throws IOException {
         LegacyJarTransformer.Result result = new LegacyJarTransformer.Result();
         Map<String, byte[]> classes = new LinkedHashMap<>();
         Map<String, byte[]> other = new LinkedHashMap<>();
@@ -250,7 +283,7 @@ public final class Forge1201Transformer {
         int stringsMapped = 0;
         int rewrites = 0;
         List<ClassNode> nodes = new ArrayList<>();
-        Mc1201Hierarchy hierarchy = new Mc1201Hierarchy();
+        Mc1201Hierarchy hierarchy = new Mc1201Hierarchy().peers(peers);
         java.util.Set<String> serializable = SerialUids.serializable(classes);
         for (var e : classes.entrySet()) {
             ClassNode node = new ClassNode();
@@ -267,12 +300,14 @@ public final class Forge1201Transformer {
         if (datagen.classes + datagen.methods > 0) result.notes.add("Data generation code dropped (dead in a running game): " + datagen);
         Mc1201Migration.Counts mc = new Mc1201Migration.Counts();
         Mixin1201.Stats mixinStats = new Mixin1201.Stats();
+        mixinStats.refmaps = org.kylepitcock.legacyconnector.loader.transform.mixin1201.Refmaps.parse(other);
         Set<String> jarClasses = new HashSet<>();
         Set<String> compoundSubclasses = new HashSet<>();
         for (ClassNode node : nodes) {
             jarClasses.add(node.name);
             if (CallRewrites1201.COMPOUND.equals(node.superName)) compoundSubclasses.add(node.name);
         }
+        java.util.function.Predicate<String> modEvents = n -> jarClasses.contains(n) && hierarchy.isSubclassOf(n, "net/neoforged/bus/api/Event");
         Map<ClassNode, Integer> migrated = new java.util.IdentityHashMap<>();
         SoftLink1201 soft = softLinkEnabled() ? new SoftLink1201(nodes, hierarchy) : null;
         int palladiumKubejsChanges = 0;
@@ -330,7 +365,8 @@ public final class Forge1201Transformer {
             palladiumKubejsChanges += palladiumChanges;
             int palladiumAddonPackChange = PalladiumAddonPackManager1201.apply(node);
             palladiumAddonPackChanges += palladiumAddonPackChange;
-            viaCalls += ForgeApiRewrites1201.apply(node);
+            viaCalls += ForgeApiRewrites1201.apply(node, modEvents);
+            if (modEvents.test(node.name) && ForgeApiRewrites1201.markCancelable(node)) viaCalls++;
             viaCalls += AttachGuards1201.apply(node, jarClasses);
             if (ForgeApiRewrites1201.markProviders(node)) viaCalls++;
             rewrites += viaCalls;
@@ -372,8 +408,8 @@ public final class Forge1201Transformer {
             palladiumPowersScreenChanges += palladiumPowersScreenChange;
             int palladiumSelectionListChange = PalladiumSelectionLists1201.apply(node);
             palladiumSelectionListChanges += palladiumSelectionListChange;
-            Mixin1201.apply(node, srg, hierarchy, Mc1201Tables.get(), mixinStats);
-            migrated.put(node, viaCalls + changed.total() + palladiumChanges + palladiumAddonPackChange
+            int mixinResigned = Mixin1201.apply(node, srg, hierarchy, Mc1201Tables.get(), mixinStats);
+            migrated.put(node, mixinResigned + viaCalls + changed.total() + palladiumChanges + palladiumAddonPackChange
                     + palladiumWidgetButtonChange + palladiumMixinChange + palladiumLootChange
                     + palladiumAccessoryScreenChange + palladiumAdvancementWidgetChange + palladiumPowersScreenChange
                     + palladiumSelectionListChange + palladiumSuitStandChange
@@ -487,6 +523,7 @@ public final class Forge1201Transformer {
         }
         if (mixinStats.mixinClasses > 0) result.notes.add("Mixins: " + mixinStats.summary());
         for (String d : mixinStats.dropped) result.notes.add("Mixin dropped, its target no longer exists in Minecraft 1.21.1: " + d);
+        result.notes.addAll(mixinStats.repair.notes);
         if (rewrites > 0) result.notes.add(rewrites + " call site(s) rewritten for changed 1.21.1 signatures (ResourceLocation factories, event bus post, PalladiumCore renderer lookup, inventory entity preview)");
         if (stringsMapped > 0) result.notes.add(stringsMapped + " reflection string(s) with SRG names now use Mojang names");
 

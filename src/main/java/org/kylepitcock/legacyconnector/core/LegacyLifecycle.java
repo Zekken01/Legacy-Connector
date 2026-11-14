@@ -105,6 +105,21 @@ public final class LegacyLifecycle {
         LOG.info("Legacy mods loaded in {} ms ({} failed)", System.currentTimeMillis() - start, FAILED.size() - CLIENT_ONLY.size());
     }
 
+    /**
+     * The required dependencies of this legacy mod that the loader found not installed ("X requires Y (range), which is not installed"), empty
+     * when none. The mod still loads; if it fails, {@link LegacyModException} starts its message with these.
+     */
+    public static List<String> missingDependencies(String legacyId) {
+        String lines = System.getProperty("legacyconnector.missingDependencies", "");
+        List<String> out = new ArrayList<>();
+        if (lines.isBlank() || legacyId == null) return out;
+        for (String line : lines.split("\n")) {
+            int tab = line.indexOf('\t');
+            if (tab > 0 && line.substring(0, tab).equalsIgnoreCase(legacyId)) out.add(line.substring(tab + 1));
+        }
+        return out;
+    }
+
     public static void onCommonSetup(FMLCommonSetupEvent event) {
         event.enqueueWork(() -> {
             phase(LegacyMods.ordered(), "loadComplete", m -> LegacyMods.platform(m.version).loadComplete(m));
@@ -164,6 +179,7 @@ public final class LegacyLifecycle {
                 }
                 LOG.error("{}", wrapped.getMessage(), t);
                 FAILED.put(mod, wrapped);
+                org.kylepitcock.legacyconnector.api.internal.AddonHost.modFailed(mod, name);
                 if ("b1.7.3".equals(mod.version)) org.kylepitcock.legacyconnector.vb1_7_3.dimension.DimensionRegistrationsB173.removeOwner(mod);
             } finally {
                 if (numericIds) legacyconnector.v1_6_4.net.minecraft.util.Ids.leave(previousIds);

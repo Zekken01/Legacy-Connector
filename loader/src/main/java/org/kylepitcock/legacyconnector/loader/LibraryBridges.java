@@ -67,7 +67,14 @@ public final class LibraryBridges {
             java.util.Map.entry("coretweaks", "1.7.10 bug-fix/performance patches; not applicable to 1.21.1"),
             java.util.Map.entry("lwjgl3ify", "runs 1.7.10 on LWJGL 3 / modern Java; 1.21.1 already does"),
             java.util.Map.entry("angelica", "1.7.10 renderer replacement; use a modern renderer mod (e.g. Sodium/Embeddium)"),
-            java.util.Map.entry("notfine", "1.7.10 graphics options; use a modern renderer/options mod"),
+            java.util.Map.entry("mcpatcherforge", "1.7.10 MCPatcher port patching the old renderer (bundled in Angelica); the layer converts connected textures itself"),
+            java.util.Map.entry("beddium", "1.7.10 renderer replacement (Sodium port); use a modern renderer mod (e.g. Sodium/Embeddium)"),
+            java.util.Map.entry("falsetweaks", "1.7.10 renderer performance patches; not applicable to 1.21.1"),
+            java.util.Map.entry("infiview", "1.7.10 render distance patch; 1.21.1 has no such limit"),
+            java.util.Map.entry("angellib", "library of the 1.7.10 renderer replacement Angelica; not applicable to 1.21.1"),
+            java.util.Map.entry("euphoriacompanion", "companion of the 1.7.10 shader renderer Angelica; use a modern shader mod (Iris)"),
+            java.util.Map.entry("crash_assistant", "1.7.10 JVM crash window (AWT); not applicable to 1.21.1"),
+            java.util.Map.entry("notfine","1.7.10 graphics options; use a modern renderer/options mod"),
             java.util.Map.entry("neid", "1.7.10 ID limit extender; 1.21.1 has no ID limits"),
             java.util.Map.entry("fastleafdecay", "use a modern fast leaf decay mod"),
             java.util.Map.entry("betterloadingscreen", "1.7.10 loading screen; NeoForge has its own"),
@@ -126,6 +133,13 @@ public final class LibraryBridges {
         return !"false".equalsIgnoreCase(readConfig(modsDir).getProperty("experimental.forge1201.softlink", "true").trim());
     }
 
+    private static volatile Set<String> lastModern = Set.of();
+
+    /** Modern mod ids of the mods folder seen by the last {@link #active} call, whatever the 1.20.1 setting. */
+    public static Set<String> seenModernIds() {
+        return lastModern;
+    }
+
     /** Modern mod ids of the mods folder seen by the last {@link #active} call. */
     public static Set<String> installedModernIds() {
         return installedModern;
@@ -155,6 +169,11 @@ public final class LibraryBridges {
         return other != null ? other : legacyId;
     }
 
+    /** Lower-case ids of the engine-only mods that are never loaded: a dependency on one of them counts as satisfied. */
+    public static Set<String> obsoleteIds() {
+        return OBSOLETE.keySet();
+    }
+
     /** Why a legacy jar is obsolete on 1.21.1 (all its mods are on the list) or switched off by the pack maker, or null. */
     public static String obsoleteReason(LegacyJar jar) {
         if (!jar.hasMods()) return null;
@@ -182,6 +201,7 @@ public final class LibraryBridges {
     public static List<Bridge> active(Path modsDir) {
         Set<String> modern = modernModIds(modsDir);
         installedModern = forge1201On(modsDir) ? modern : Set.of();
+        lastModern = modern;
         Properties config = readConfig(modsDir);
         applyUserConfig(config);
         String forced = System.getProperty("legacyconnector.bridges", "").toLowerCase(Locale.ROOT);

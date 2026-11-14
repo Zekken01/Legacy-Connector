@@ -69,6 +69,12 @@ public final class Client1122 {
             } catch (RuntimeException | LinkageError e) {
                 RenderErrors1122.report("listing the model textures outside blocks/ and items/", e);
             }
+            try {
+                // the fluids' textures (Forge 1.12 stitched every fluid's) and the generated buckets' item models
+                Fluids1122.contribute(out);
+            } catch (RuntimeException | LinkageError e) {
+                RenderErrors1122.report("adding the fluid textures and bucket models", e);
+            }
             Sprites1122.contribute(out);
         });
         modBus.addListener((TextureAtlasStitchedEvent e) -> {
@@ -92,7 +98,15 @@ public final class Client1122 {
         });
         modBus.addListener((net.neoforged.neoforge.client.event.RegisterColorHandlersEvent.Item e) -> {
             if (present()) Colors1122.onItemColors(e);
+            if (present()) Fluids1122.onItemColors(e);
         });
+        // 1.12.2 fluids: textures and colours of their fluid types, render layers of those placed in the world
+        modBus.addListener((net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent e) -> {
+            if (present()) Fluids1122.onRegisterClientExtensions(e);
+        });
+        modBus.addListener((net.neoforged.fml.event.lifecycle.FMLClientSetupEvent e) -> e.enqueueWork(() -> {
+            if (present()) Fluids1122.setRenderLayers();
+        }));
         modBus.addListener(Client1122::onModifyBaking);
         // the models of states beyond the metadata are blockstate variants baked on their own (rotation with uvlock)
         modBus.addListener((net.neoforged.neoforge.client.event.ModelEvent.RegisterGeometryLoaders e) ->
@@ -171,6 +185,11 @@ public final class Client1122 {
             ActualStateModels1122.wrap(event.getModels());
         } catch (RuntimeException | LinkageError e) {
             RenderErrors1122.report("choosing models by actual state", e);
+        }
+        try {
+            CustomRenderTypeModels1122.wrap(event.getModels());
+        } catch (RuntimeException | LinkageError e) {
+            RenderErrors1122.report("wrapping the models of custom render types", e);
         }
         if (registry.replaced > 0) org.slf4j.LoggerFactory.getLogger("LegacyConnector/Models").info("1.12.2 mods replaced {} baked model(s)", registry.replaced);
     }

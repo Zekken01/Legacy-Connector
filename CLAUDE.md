@@ -53,12 +53,14 @@ holding the hand-written shim under `src/main/java/legacyconnector/v1_7_10`, bri
   count of `src/main/java/**/*.java` with the classes under `build/classes` (Gradle can silently drop moved classes).
 - `./gradlew build` for everything, `./gradlew checkLegacyMod -PlegacyJar=a.jar,b.jar` for an offline link check of
   jars (generates and verifies the synthesized API).
+- Regression suites: `tools/dev/verify.sh [--update] [suite ...]` runs named jar sets (`tools/dev/verify/suites/*.txt`) through the headless server self test and compares the metrics with `tools/dev/verify/baseline.json` (wiki Development, "Regression suites"); run it before merging shim/loader changes.
 - Server tests: `tools/dev/run-subset.sh <jar-name-fragments>` (a few mods, 1-2 min, prints the block/item/entity
   self tests), `tools/dev/run-corpus.sh [dir]` (a whole directory of jars). Test mods are user-supplied and
   gitignored (`test-mods/`, `test-mods2/`); never commit or redistribute mod jars. Run only one server at a time and never
   compile while one runs; kill stale ones with `pkill -9 -f "serverSubTestRunProgramArg[s]"` (the `[s]` stops the pattern matching itself).
 - Translation results are cached per jar and mod set (`run-*/.legacyconnector/cache`). After changing the loader,
   linker, stubber or shim, delete the cache or the old translation is reused.
+- Scripted client scenarios (real window, unattended): `tools/dev/verify-client.sh [scenario ...]`, scenarios in `tools/dev/verify/scenarios/*.txt` (verbs, `expect <regex> :: <JavaScript>`, `shot`, `logabsent`); results and screenshots in `build/devtools/verify-client/`; see wiki Development, "Client scenarios".
 - Client/graphical tests must not open a window on the developer's desktop: use `tools/dev/docker-headless.sh`
   (Colima + Docker, Xvfb + Mesa). `tools/dev/session.sh start <jar fragments>` boots one long-lived headless client you
   drive with `session.sh send cmd "<slash command>"|info|wait n|mouse x y|click x y`, `session.sh shot <name>`
@@ -106,22 +108,23 @@ holding the hand-written shim under `src/main/java/legacyconnector/v1_7_10`, bri
 ## Addon API
 
 - Public API for other mods: `src/main/java/org/kylepitcock/legacyconnector/api` (+ `api.event`); implementation and the only code touching shim types: `api/internal` (`Convert`, `ContentKeys`, `BuiltinAdapters`). Docs `docs/wiki/Addon-API.md`, example `examples/thaumcraft-modern-aspects` (standalone build, `./gradlew apiJar` first).
-- Rule: API signatures never contain shim types (legacy objects are `Object`, reached through `LegacyAccess`); keep the API stable (PATCH-compatible), hook calls live in `LegacyLifecycle` (`AddonHost.enter`) and `LegacyConnector.registerCapabilities` (`CapabilityRules.apply`). Update the doc when adding API.
+- Rule: API signatures never contain shim types (legacy objects are `Object`, reached through `LegacyAccess`); keep the API stable (PATCH-compatible), hook calls live in `LegacyLifecycle` (`AddonHost.enter`) and `LegacyConnector.registerCapabilities` (`CapabilityRules.apply`). Update the doc when adding API. Covers every supported version (API 0.3: Beta 1.7.3, `versionOf`, failure event, fluids, tabs); `LegacySupport` is the per-version matrix and `LegacySupportTest` keeps the doc table in sync (`API_DOCS_UPDATE=1` rewrites it), `ApiSignatureTest` rejects shim types in signatures.
 
 ## Releases
 
 Two channels (since 2026-11-13):
 
 - **Nightly** (automatic): `.github/workflows/nightly.yml` builds `bundleJar` after every push to master (docs-only pushes are skipped) and
-  replaces the rolling GitHub pre-release `nightly` (version `<mod_version>-nightly.<run>.<sha>`, never sent to Modrinth/CurseForge). So a
+  replaces the rolling GitHub pre-release `nightly` (version `<latest release>-nightly.<run>.<sha>`, never sent to Modrinth/CurseForge). So a
   fix reaches players by pushing to master; point reporters to the nightly when their problem is fixed there. Do not cut a release for a
   single fix.
 - **Stable** (less frequent, bigger): only when the maintainer asks or a batch of verified work has accumulated. Pre-1.0 versioning: bump
   the PATCH per release; bump the MINOR only for a milestone (a new legacy version supported); 1.0.0 is reserved for when the project is
   ready. Cut it from GitHub: Actions > **Release** > Run workflow (`.github/workflows/release.yml`; or
-  `gh workflow run release.yml -f version=0.5.0 -f notes="..."`; empty version = next patch). It sets `mod_version` in `gradle.properties`
-  and commits it, builds `bundleJar`, creates tag `v<ver>` and the GitHub release (notes + commit list since the last release) and starts
-  `publish.yml` (Modrinth, CurseForge; skips pre-releases) and `probe.yml`. Pull master afterwards (the workflow pushed the version commit).
+  `gh workflow run release.yml -f version=0.5.0 -f notes="..."`; empty version = next patch). It builds `bundleJar` of master with
+  `-Pmod_version=<ver>` (nothing is committed: master is protected against pushes without a pull request, so `mod_version` in
+  `gradle.properties` is only the local default; bump it by hand after a release), creates tag `v<ver>` and the GitHub release (notes + commit list since the last release) and starts
+  `publish.yml` (Modrinth, CurseForge; skips pre-releases) and `probe.yml`.
   By hand, if ever needed: set `mod_version` BEFORE building and committing, `./gradlew bundleJar`, copy
   `build/dist/legacyconnector-<ver>*.jar` to `legacyconnector-<ver>.jar`, `gh release create v<ver> <jar>`.
 
